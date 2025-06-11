@@ -13,6 +13,9 @@ SlightBar is a sleek and powerful universal search and command bar for your desk
 - **Configurable**: Type `!s` to open the settings view. Configure your AI provider, API keys, theme, and more.
 - **Platform**: Windows
 
+### AI Tools Disclaimer
+The web search and scrape tools for the AI assistant require a locally running [SearXNG](https://github.com/searxng/searxng-docker) instance. This is a private, self-hosted search engine that respects your privacy. You can find instructions on how to set it up [here](https://github.com/searxng/searxng-docker). By default, the app will try to connect to it at `http://127.0.0.1:8080`.
+
 ## Getting Started
 
 ### Prerequisites
