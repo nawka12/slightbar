@@ -1,15 +1,17 @@
 # SlightBar: Your Universal Search and Command Bar
 
-SlightBar is a sleek and powerful universal search and command bar for your desktop. It's designed to be a lightweight and fast way to access your applications, files, and commands with just a few keystrokes.
+SlightBar is a sleek and powerful universal search and command bar for your desktop. It's designed to be a lightweight and fast way to access your applications, files, and AI-powered commands with just a few keystrokes.
 
 ## Features
 
-- **Universal Search**: Quickly find and launch applications, files, and folders on your system.
-- **Command Execution**: Run shell commands directly from the bar.
-- **Web Search**: Seamlessly search the web by prefixing your query with a keyword (e.g., `g search term`).
-- **Customizable Hotkey**: Activate SlightBar from anywhere with a custom global hotkey.
-- **Extensible**: The plugin-based architecture (coming soon) will allow for a wide range of additional features.
-- **Cross-Platform**: Works on Windows, macOS, and Linux.
+- **Application & File Search**: Quickly find and launch applications and files on your system.
+- **AI Assistant**: Start your query with `?` to ask questions. The assistant can:
+    - **Search the web**: Get up-to-date information.
+    - **Get weather forecasts**: Check the weather for any city.
+    - **Answer general questions**: Powered by local or remote LLMs (Ollama, OpenAI, Anthropic).
+- **Global Hotkey**: Activate SlightBar from anywhere with `Ctrl + /`.
+- **Configurable**: Type `!s` to open the settings view. Configure your AI provider, API keys, theme, and more.
+- **Platform**: Windows
 
 ## Getting Started
 
@@ -21,7 +23,7 @@ SlightBar is a sleek and powerful universal search and command bar for your desk
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/slightbar.git
+    git clone https://github.com/nawka12/slightbar.git
     ```
 2.  **Navigate to the project directory:**
     ```bash
@@ -33,15 +35,18 @@ SlightBar is a sleek and powerful universal search and command bar for your desk
     ```
 4.  **Run the app:**
     ```bash
-    flutter run
+    flutter run -d windows
     ```
 
 ## Usage
 
-1.  Press the global hotkey to show SlightBar (by default, it's `Alt + Space`).
+1.  Press the global hotkey `Ctrl + /` to show SlightBar.
 2.  Start typing to search for applications or files.
-3.  Use the arrow keys to navigate the results.
-4.  Press `Enter` to launch the selected item.
+3.  Start your query with `?` to use the AI Assistant.
+4.  Type `!s` to open settings.
+5.  Use the arrow keys to navigate the results.
+6.  Press `Enter` to launch the selected item.
+7.  Press `Esc` to hide the bar.
 
 ## Contributing
 
