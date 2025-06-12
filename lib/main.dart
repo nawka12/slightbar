@@ -11,6 +11,7 @@ import 'package:process_run/shell.dart';
 import 'package:slightbar/gemma.dart';
 import 'package:slightbar/settings_service.dart';
 import 'package:slightbar/settings_view.dart';
+import 'package:slightbar/about_view.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:path/path.dart' as p;
 import 'package:open_file/open_file.dart';
@@ -70,9 +71,11 @@ class _MyAppState extends State<MyApp> {
   String _gemmaResponse = '';
   bool _isGemmaLoading = false;
   bool _isShowingSettings = false;
+  bool _isShowingAbout = false;
   List<String> _usedTools = [];
   final GlobalKey<SettingsViewState> _settingsViewKey =
       GlobalKey<SettingsViewState>();
+  final GlobalKey<AboutViewState> _aboutViewKey = GlobalKey<AboutViewState>();
 
   @override
   void dispose() {
@@ -93,11 +96,68 @@ class _MyAppState extends State<MyApp> {
     _resizeWindow();
   }
 
+  /// Helper method to find which display contains the current cursor position
+  Future<Display> _getCurrentDisplay() async {
+    try {
+      final cursorPosition = await screenRetriever.getCursorScreenPoint();
+      final allDisplays = await screenRetriever.getAllDisplays();
+
+      // Find the display that contains the cursor position
+      for (final display in allDisplays) {
+        final bounds = Rect.fromLTWH(
+          display.visiblePosition?.dx ?? 0,
+          display.visiblePosition?.dy ?? 0,
+          display.visibleSize?.width ?? display.size.width,
+          display.visibleSize?.height ?? display.size.height,
+        );
+
+        if (bounds.contains(cursorPosition)) {
+          return display;
+        }
+      }
+
+      // Fallback to primary display if cursor is not found on any display
+      return await screenRetriever.getPrimaryDisplay();
+    } catch (e) {
+      // Fallback to primary display on any error
+      return await screenRetriever.getPrimaryDisplay();
+    }
+  }
+
+  /// Helper method to position window on the current display
+  Future<void> _positionWindowOnCurrentScreen() async {
+    final currentDisplay = await _getCurrentDisplay();
+    final screenSize = currentDisplay.visibleSize ?? currentDisplay.size;
+    final screenPosition = currentDisplay.visiblePosition ?? const Offset(0, 0);
+    final windowSize = await windowManager.getSize();
+
+    final x = screenPosition.dx + (screenSize.width - windowSize.width) / 2;
+    final y = screenPosition.dy + screenSize.height * 0.3;
+
+    await windowManager.setPosition(Offset(x, y));
+  }
+
   void _handleCommand(String text) {
     final query = text.trim();
     if (query == '!s') {
       setState(() {
         _isShowingSettings = !_isShowingSettings;
+        _isShowingAbout = false; // Hide about if settings is shown
+        _selectedIndex = 0; // Reset selection
+        // Clear other states
+        _filteredApps = [];
+        _foundFiles = [];
+        _gemmaResponse = '';
+        _isGemmaLoading = false;
+      });
+      _textController.clear();
+      _resizeWindow();
+      return;
+    }
+    if (query == '!a') {
+      setState(() {
+        _isShowingAbout = !_isShowingAbout;
+        _isShowingSettings = false; // Hide settings if about is shown
         _selectedIndex = 0; // Reset selection
         // Clear other states
         _filteredApps = [];
@@ -114,7 +174,7 @@ class _MyAppState extends State<MyApp> {
   void _onSearchChanged() async {
     final query = _textController.text;
 
-    if (query.trim() == '!s') {
+    if (query.trim() == '!s' || query.trim() == '!a') {
       _handleCommand(query);
       return;
     }
@@ -128,9 +188,12 @@ class _MyAppState extends State<MyApp> {
       _selectedIndex = 0;
     });
 
-    // Hide settings if user types anything else
-    if (_isShowingSettings && query.isNotEmpty) {
-      setState(() => _isShowingSettings = false);
+    // Hide settings and about if user types anything else
+    if ((_isShowingSettings || _isShowingAbout) && query.isNotEmpty) {
+      setState(() {
+        _isShowingSettings = false;
+        _isShowingAbout = false;
+      });
     }
 
     if (SettingsService().aiEnabled && query.startsWith('?')) {
@@ -233,25 +296,53 @@ class _MyAppState extends State<MyApp> {
     });
     _resizeWindow(); // Resize for loading indicator
 
-    final result =
-        await GemmaService.askWithTools(query, onToolUsage: (toolMessage) {
+    await for (final chunk
+        in GemmaService.askWithToolsStream(query, onToolUsage: (toolMessage) {
       setState(() {
         _gemmaResponse = toolMessage;
         _isGemmaLoading =
             false; // Show the tool message instead of loading spinner
       });
       _resizeWindow();
-    });
+      _scrollToBottom();
+    })) {
+      switch (chunk['type']) {
+        case 'chunk':
+          setState(() {
+            _gemmaResponse = chunk['fullResponse'] as String;
+            _isGemmaLoading = false;
+            // Update used tools if available
+            _usedTools = SettingsService().toolsEnabled
+                ? chunk['usedTools'] as List<String>
+                : [];
+          });
+          _resizeWindow();
+          _scrollToBottom();
+          break;
 
-    setState(() {
-      _gemmaResponse = result['response'] as String;
-      // Only show used tools if tools are enabled
-      _usedTools = SettingsService().toolsEnabled
-          ? result['usedTools'] as List<String>
-          : [];
-      _isGemmaLoading = false;
-    });
-    _resizeWindow();
+        case 'tool_usage':
+          setState(() {
+            _gemmaResponse = chunk['content'] as String;
+            _isGemmaLoading = false;
+          });
+          _resizeWindow();
+          _scrollToBottom();
+          break;
+
+        case 'complete':
+        case 'error':
+          setState(() {
+            _gemmaResponse = chunk['content'] as String;
+            _usedTools = SettingsService().toolsEnabled
+                ? chunk['usedTools'] as List<String>
+                : [];
+            _isGemmaLoading = false;
+          });
+          _resizeWindow();
+          _scrollToBottom();
+          break;
+      }
+    }
   }
 
   void _resizeWindow() {
@@ -265,15 +356,12 @@ class _MyAppState extends State<MyApp> {
     if (_isGemmaLoading) {
       newHeight += listItemHeight * 2; // for loading indicator and some space
     } else if (_gemmaResponse.isNotEmpty) {
-      final textPainter = TextPainter(
-        text: TextSpan(
-            text: _gemmaResponse, style: const TextStyle(color: Colors.white)),
-        textDirection: TextDirection.ltr,
-      )..layout(maxWidth: windowWidth - 40); // account for padding
-
-      newHeight += textPainter.height + 40; // Add some padding
-    } else if (_isShowingSettings) {
-      newHeight = 450; // Fixed height for settings
+      // For AI responses, use a fixed height that allows for scrolling
+      // This provides a consistent experience for both short and long responses
+      const aiResponseHeight = 400.0;
+      newHeight += aiResponseHeight;
+    } else if (_isShowingSettings || _isShowingAbout) {
+      newHeight = 450; // Fixed height for settings and about
     } else if (displayableResults > 0) {
       newHeight += (visibleResultCount * listItemHeight) + 1; // +1 for divider
     }
@@ -334,6 +422,8 @@ class _MyAppState extends State<MyApp> {
         if (isVisible) {
           await windowManager.hide();
         } else {
+          // Position window on current screen before showing
+          await _positionWindowOnCurrentScreen();
           // Show window immediately and refresh apps in the background
           _getInstalledApps();
           await windowManager.show();
@@ -408,129 +498,138 @@ class _MyAppState extends State<MyApp> {
                     if (allDisplayResults.isNotEmpty ||
                         _gemmaResponse.isNotEmpty ||
                         _isGemmaLoading ||
-                        _isShowingSettings)
+                        _isShowingSettings ||
+                        _isShowingAbout)
                       Divider(height: 1, color: dividerColor),
                     Expanded(
                       child: _isShowingSettings
                           ? SettingsView(
                               key: _settingsViewKey,
                               onSettingsChanged: () => setState(() {}))
-                          : _isGemmaLoading
-                              ? Center(
-                                  child: SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 3,
-                                        color: secondaryTextColor),
-                                  ),
-                                )
-                              : _gemmaResponse.isNotEmpty
-                                  ? Scrollbar(
-                                      controller: _gemmaScrollController,
-                                      thumbVisibility: true,
-                                      child: SingleChildScrollView(
-                                        controller: _gemmaScrollController,
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            _buildToolIcons(
-                                                color: secondaryTextColor),
-                                            Padding(
-                                              padding:
-                                                  const EdgeInsets.all(12.0),
-                                              child: MarkdownBody(
-                                                data: _gemmaResponse,
-                                                onTapLink: (text, href, title) {
-                                                  if (href != null) {
-                                                    launchUrl(Uri.parse(href));
-                                                  }
-                                                },
-                                                styleSheet: MarkdownStyleSheet(
-                                                  p: TextStyle(
-                                                      color: textColor,
-                                                      fontSize: 14),
-                                                  h1: TextStyle(
-                                                      color: textColor,
-                                                      fontSize: 24),
-                                                  h2: TextStyle(
-                                                      color: textColor,
-                                                      fontSize: 20),
-                                                  strong: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.bold),
-                                                  listBullet: TextStyle(
-                                                      color: textColor),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                          : _isShowingAbout
+                              ? AboutView(key: _aboutViewKey)
+                              : _isGemmaLoading
+                                  ? Center(
+                                      child: SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 3,
+                                            color: secondaryTextColor),
                                       ),
                                     )
-                                  : ListView.builder(
-                                      controller: _scrollController,
-                                      itemCount: allDisplayResults.length,
-                                      itemBuilder: (context, index) {
-                                        final itemPathOrName =
-                                            allDisplayResults[index];
-                                        final isApp = _installedApps
-                                            .containsKey(itemPathOrName);
-                                        final isSelected =
-                                            index == _selectedIndex;
-
-                                        final titleColor = isSelected
-                                            ? Colors.white
-                                            : textColor;
-                                        final subtitleColor = isSelected
-                                            ? Colors.white70
-                                            : hintColor;
-
-                                        Widget listItem;
-                                        if (isApp) {
-                                          listItem = ListTile(
-                                            title: Text(
-                                              itemPathOrName,
-                                              style:
-                                                  TextStyle(color: titleColor),
-                                              overflow: TextOverflow.ellipsis,
+                                  : _gemmaResponse.isNotEmpty
+                                      ? Scrollbar(
+                                          controller: _gemmaScrollController,
+                                          thumbVisibility: true,
+                                          child: SingleChildScrollView(
+                                            controller: _gemmaScrollController,
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                _buildToolIcons(
+                                                    color: secondaryTextColor),
+                                                Padding(
+                                                  padding: const EdgeInsets.all(
+                                                      12.0),
+                                                  child: MarkdownBody(
+                                                    data: _gemmaResponse,
+                                                    onTapLink:
+                                                        (text, href, title) {
+                                                      if (href != null) {
+                                                        launchUrl(
+                                                            Uri.parse(href));
+                                                      }
+                                                    },
+                                                    styleSheet:
+                                                        MarkdownStyleSheet(
+                                                      p: TextStyle(
+                                                          color: textColor,
+                                                          fontSize: 14),
+                                                      h1: TextStyle(
+                                                          color: textColor,
+                                                          fontSize: 24),
+                                                      h2: TextStyle(
+                                                          color: textColor,
+                                                          fontSize: 20),
+                                                      strong: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.bold),
+                                                      listBullet: TextStyle(
+                                                          color: textColor),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                            onTap: () {
-                                              _launchApp(itemPathOrName);
-                                              _hideAndClear();
-                                            },
-                                          );
-                                        } else {
-                                          listItem = ListTile(
-                                            title: Text(
-                                              p.basename(itemPathOrName),
-                                              style:
-                                                  TextStyle(color: titleColor),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            subtitle: Text(
-                                              itemPathOrName,
-                                              style: TextStyle(
-                                                  color: subtitleColor),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            onTap: () {
-                                              OpenFile.open(itemPathOrName);
-                                              _hideAndClear();
-                                            },
-                                          );
-                                        }
+                                          ),
+                                        )
+                                      : ListView.builder(
+                                          controller: _scrollController,
+                                          itemCount: allDisplayResults.length,
+                                          itemBuilder: (context, index) {
+                                            final itemPathOrName =
+                                                allDisplayResults[index];
+                                            final isApp = _installedApps
+                                                .containsKey(itemPathOrName);
+                                            final isSelected =
+                                                index == _selectedIndex;
 
-                                        return Container(
-                                          height: listItemHeight,
-                                          color: isSelected
-                                              ? Colors.blue.withAlpha(128)
-                                              : Colors.transparent,
-                                          child: listItem,
-                                        );
-                                      },
-                                    ),
+                                            final titleColor = isSelected
+                                                ? Colors.white
+                                                : textColor;
+                                            final subtitleColor = isSelected
+                                                ? Colors.white70
+                                                : hintColor;
+
+                                            Widget listItem;
+                                            if (isApp) {
+                                              listItem = ListTile(
+                                                title: Text(
+                                                  itemPathOrName,
+                                                  style: TextStyle(
+                                                      color: titleColor),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                                onTap: () {
+                                                  _launchApp(itemPathOrName);
+                                                  _hideAndClear();
+                                                },
+                                              );
+                                            } else {
+                                              listItem = ListTile(
+                                                title: Text(
+                                                  p.basename(itemPathOrName),
+                                                  style: TextStyle(
+                                                      color: titleColor),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                                subtitle: Text(
+                                                  itemPathOrName,
+                                                  style: TextStyle(
+                                                      color: subtitleColor),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                                onTap: () {
+                                                  OpenFile.open(itemPathOrName);
+                                                  _hideAndClear();
+                                                },
+                                              );
+                                            }
+
+                                            return Container(
+                                              height: listItemHeight,
+                                              color: isSelected
+                                                  ? Colors.blue.withAlpha(128)
+                                                  : Colors.transparent,
+                                              child: listItem,
+                                            );
+                                          },
+                                        ),
                     ),
                   ],
                 ),
@@ -577,8 +676,16 @@ class _MyAppState extends State<MyApp> {
         return KeyEventResult.handled;
       }
 
+      if (_isShowingAbout) {
+        _aboutViewKey.currentState?.handleEnter();
+        return KeyEventResult.handled;
+      }
+
       // Handle local search result selection
-      if (!_isShowingSettings && !_isGemmaLoading && _gemmaResponse.isEmpty) {
+      if (!_isShowingSettings &&
+          !_isShowingAbout &&
+          !_isGemmaLoading &&
+          _gemmaResponse.isEmpty) {
         final allDisplayResults =
             [..._filteredApps, ..._foundFiles].take(maxResults).toList();
         if (_selectedIndex >= 0 && _selectedIndex < allDisplayResults.length) {
@@ -596,7 +703,10 @@ class _MyAppState extends State<MyApp> {
     }
 
     // Handle list navigation only for local search results
-    if (!_isShowingSettings && !_isGemmaLoading && _gemmaResponse.isEmpty) {
+    if (!_isShowingSettings &&
+        !_isShowingAbout &&
+        !_isGemmaLoading &&
+        _gemmaResponse.isEmpty) {
       final allDisplayResults =
           [..._filteredApps, ..._foundFiles].take(maxResults).toList();
 
@@ -630,6 +740,16 @@ class _MyAppState extends State<MyApp> {
       }
     }
 
+    if (_isShowingAbout) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        _aboutViewKey.currentState?.navigateDown();
+        return KeyEventResult.handled;
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        _aboutViewKey.currentState?.navigateUp();
+        return KeyEventResult.handled;
+      }
+    }
+
     return KeyEventResult.ignored;
   }
 
@@ -641,6 +761,19 @@ class _MyAppState extends State<MyApp> {
         curve: Curves.easeInOut,
       );
     }
+  }
+
+  void _scrollToBottom() {
+    // Auto-scroll to bottom for Gemma responses during streaming
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_gemmaScrollController.hasClients) {
+        _gemmaScrollController.animateTo(
+          _gemmaScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 100),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   void _launchApp(String appName) {

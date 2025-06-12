@@ -15,12 +15,18 @@ class SettingsViewState extends State<SettingsView> {
   bool _isEditingModel = false;
   bool _isEditingOpenaiKey = false;
   bool _isEditingAnthropicKey = false;
+  bool _isEditingGeminiKey = false;
+  bool _isEditingSearxngUrl = false;
   final TextEditingController _modelTextController = TextEditingController();
   final TextEditingController _openaiKeyController = TextEditingController();
   final TextEditingController _anthropicKeyController = TextEditingController();
+  final TextEditingController _geminiKeyController = TextEditingController();
+  final TextEditingController _searxngUrlController = TextEditingController();
   final FocusNode _modelFocusNode = FocusNode();
   final FocusNode _openaiKeyFocusNode = FocusNode();
   final FocusNode _anthropicKeyFocusNode = FocusNode();
+  final FocusNode _geminiKeyFocusNode = FocusNode();
+  final FocusNode _searxngUrlFocusNode = FocusNode();
 
   // This list will hold all the settings widgets
   late List<Widget> _settingsItems;
@@ -31,6 +37,8 @@ class SettingsViewState extends State<SettingsView> {
     _modelTextController.text = _settings.gemmaModel;
     _openaiKeyController.text = _settings.openaiApiKey;
     _anthropicKeyController.text = _settings.anthropicApiKey;
+    _geminiKeyController.text = _settings.geminiApiKey;
+    _searxngUrlController.text = _settings.searxngUrl;
   }
 
   @override
@@ -38,9 +46,13 @@ class SettingsViewState extends State<SettingsView> {
     _modelTextController.dispose();
     _openaiKeyController.dispose();
     _anthropicKeyController.dispose();
+    _geminiKeyController.dispose();
+    _searxngUrlController.dispose();
     _modelFocusNode.dispose();
     _openaiKeyFocusNode.dispose();
     _anthropicKeyFocusNode.dispose();
+    _geminiKeyFocusNode.dispose();
+    _searxngUrlFocusNode.dispose();
     super.dispose();
   }
 
@@ -51,6 +63,10 @@ class SettingsViewState extends State<SettingsView> {
       _saveOpenaiKey();
     } else if (_isEditingAnthropicKey) {
       _saveAnthropicKey();
+    } else if (_isEditingGeminiKey) {
+      _saveGeminiKey();
+    } else if (_isEditingSearxngUrl) {
+      _saveSearxngUrl();
     }
     setState(() {
       _selectedIndex = (_selectedIndex + 1) % _settingsItems.length;
@@ -64,6 +80,10 @@ class SettingsViewState extends State<SettingsView> {
       _saveOpenaiKey();
     } else if (_isEditingAnthropicKey) {
       _saveAnthropicKey();
+    } else if (_isEditingGeminiKey) {
+      _saveGeminiKey();
+    } else if (_isEditingSearxngUrl) {
+      _saveSearxngUrl();
     }
     setState(() {
       _selectedIndex =
@@ -84,6 +104,10 @@ class SettingsViewState extends State<SettingsView> {
       _saveAnthropicKey();
       return;
     }
+    if (_isEditingGeminiKey) {
+      _saveGeminiKey();
+      return;
+    }
 
     switch (_selectedIndex) {
       case 0:
@@ -93,12 +117,18 @@ class SettingsViewState extends State<SettingsView> {
         _toggleAi();
         break;
       case 2:
-        _toggleTools();
+        _toggleWebSearch();
         break;
       case 3:
-        _cycleAiProvider();
+        _toggleWebScrape();
         break;
       case 4:
+        _toggleWeather();
+        break;
+      case 5:
+        _cycleAiProvider();
+        break;
+      case 6:
         // AI Model editing
         setState(() {
           _isEditingModel = true;
@@ -107,7 +137,16 @@ class SettingsViewState extends State<SettingsView> {
           _modelFocusNode.requestFocus();
         });
         break;
-      case 5:
+      case 7:
+        // SearxNG URL editing
+        setState(() {
+          _isEditingSearxngUrl = true;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _searxngUrlFocusNode.requestFocus();
+        });
+        break;
+      case 8:
         // OpenAI API Key editing
         setState(() {
           _isEditingOpenaiKey = true;
@@ -116,13 +155,22 @@ class SettingsViewState extends State<SettingsView> {
           _openaiKeyFocusNode.requestFocus();
         });
         break;
-      case 6:
+      case 9:
         // Anthropic API Key editing
         setState(() {
           _isEditingAnthropicKey = true;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _anthropicKeyFocusNode.requestFocus();
+        });
+        break;
+      case 10:
+        // Gemini API Key editing
+        setState(() {
+          _isEditingGeminiKey = true;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _geminiKeyFocusNode.requestFocus();
         });
         break;
     }
@@ -145,8 +193,20 @@ class SettingsViewState extends State<SettingsView> {
         }));
   }
 
-  void _toggleTools() {
-    _settings.toggleToolsEnabled().then((_) => setState(() {
+  void _toggleWebSearch() {
+    _settings.toggleWebSearchEnabled().then((_) => setState(() {
+          widget.onSettingsChanged();
+        }));
+  }
+
+  void _toggleWebScrape() {
+    _settings.toggleWebScrapeEnabled().then((_) => setState(() {
+          widget.onSettingsChanged();
+        }));
+  }
+
+  void _toggleWeather() {
+    _settings.toggleWeatherEnabled().then((_) => setState(() {
           widget.onSettingsChanged();
         }));
   }
@@ -156,9 +216,12 @@ class SettingsViewState extends State<SettingsView> {
     final newProvider = {
       AiProvider.ollama: AiProvider.openai,
       AiProvider.openai: AiProvider.anthropic,
-      AiProvider.anthropic: AiProvider.ollama,
+      AiProvider.anthropic: AiProvider.gemini,
+      AiProvider.gemini: AiProvider.ollama,
     }[currentProvider];
     _settings.setAiProvider(newProvider!).then((_) => setState(() {
+          // Update the model text controller to show the model for the new provider
+          _modelTextController.text = _settings.gemmaModel;
           widget.onSettingsChanged();
         }));
   }
@@ -189,6 +252,22 @@ class SettingsViewState extends State<SettingsView> {
     widget.onSettingsChanged();
   }
 
+  Future<void> _saveGeminiKey() async {
+    await _settings.setGeminiApiKey(_geminiKeyController.text);
+    setState(() {
+      _isEditingGeminiKey = false;
+    });
+    widget.onSettingsChanged();
+  }
+
+  Future<void> _saveSearxngUrl() async {
+    await _settings.setSearxngUrl(_searxngUrlController.text);
+    setState(() {
+      _isEditingSearxngUrl = false;
+    });
+    widget.onSettingsChanged();
+  }
+
   String _getProviderDisplayName(AiProvider provider) {
     switch (provider) {
       case AiProvider.ollama:
@@ -197,6 +276,8 @@ class SettingsViewState extends State<SettingsView> {
         return 'OpenAI';
       case AiProvider.anthropic:
         return 'Anthropic';
+      case AiProvider.gemini:
+        return 'Google Gemini';
     }
   }
 
@@ -208,6 +289,8 @@ class SettingsViewState extends State<SettingsView> {
         return 'OpenAI Model';
       case AiProvider.anthropic:
         return 'Anthropic Model';
+      case AiProvider.gemini:
+        return 'Gemini Model';
     }
   }
 
@@ -234,24 +317,38 @@ class SettingsViewState extends State<SettingsView> {
         isSelected: _selectedIndex == 1,
       ),
       _buildSettingsItem(
-        title: 'Enable Tools',
-        currentValue: _settings.toolsEnabled ? 'On' : 'Off',
-        onTap: _toggleTools,
+        title: 'Web Search',
+        currentValue: _settings.webSearchEnabled ? 'On' : 'Off',
+        onTap: _toggleWebSearch,
         isSelected: _selectedIndex == 2,
+      ),
+      _buildSettingsItem(
+        title: 'Web Scrape',
+        currentValue: _settings.webScrapeEnabled ? 'On' : 'Off',
+        onTap: _toggleWebScrape,
+        isSelected: _selectedIndex == 3,
+      ),
+      _buildSettingsItem(
+        title: 'Weather',
+        currentValue: _settings.weatherEnabled ? 'On' : 'Off',
+        onTap: _toggleWeather,
+        isSelected: _selectedIndex == 4,
       ),
       _buildSettingsItem(
         title: 'AI Provider',
         currentValue: _getProviderDisplayName(_settings.aiProvider),
         onTap: _cycleAiProvider,
-        isSelected: _selectedIndex == 3,
+        isSelected: _selectedIndex == 5,
       ),
       const SizedBox.shrink(), // Placeholder for the model setting widget
+      const SizedBox.shrink(), // Placeholder for SearxNG URL widget
       const SizedBox.shrink(), // Placeholder for OpenAI key widget
       const SizedBox.shrink(), // Placeholder for Anthropic key widget
+      const SizedBox.shrink(), // Placeholder for Gemini key widget
     ];
 
     // Handle model setting widget
-    bool isModelSelected = _selectedIndex == 4;
+    bool isModelSelected = _selectedIndex == 6;
     Widget modelSettingWidget;
     if (isModelSelected && _isEditingModel) {
       modelSettingWidget = _buildEditableTextItem(
@@ -267,7 +364,7 @@ class SettingsViewState extends State<SettingsView> {
         currentValue: _settings.gemmaModel,
         onTap: () {
           setState(() {
-            _selectedIndex = 4;
+            _selectedIndex = 6;
             _isEditingModel = true;
             _modelTextController.text = _settings.gemmaModel;
           });
@@ -278,10 +375,40 @@ class SettingsViewState extends State<SettingsView> {
         isSelected: isModelSelected,
       );
     }
-    _settingsItems[4] = modelSettingWidget;
+    _settingsItems[6] = modelSettingWidget;
+
+    // Handle SearxNG URL setting widget
+    bool isSearxngUrlSelected = _selectedIndex == 7;
+    Widget searxngUrlWidget;
+    if (isSearxngUrlSelected && _isEditingSearxngUrl) {
+      searxngUrlWidget = _buildEditableTextItem(
+        title: 'SearxNG URL',
+        controller: _searxngUrlController,
+        focusNode: _searxngUrlFocusNode,
+        isSelected: isSearxngUrlSelected,
+        onSubmitted: _saveSearxngUrl,
+      );
+    } else {
+      searxngUrlWidget = _buildSettingsItem(
+        title: 'SearxNG URL',
+        currentValue: _settings.searxngUrl,
+        onTap: () {
+          setState(() {
+            _selectedIndex = 7;
+            _isEditingSearxngUrl = true;
+            _searxngUrlController.text = _settings.searxngUrl;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _searxngUrlFocusNode.requestFocus();
+          });
+        },
+        isSelected: isSearxngUrlSelected,
+      );
+    }
+    _settingsItems[7] = searxngUrlWidget;
 
     // Handle OpenAI API Key widget
-    bool isOpenaiKeySelected = _selectedIndex == 5;
+    bool isOpenaiKeySelected = _selectedIndex == 8;
     Widget openaiKeyWidget;
     if (isOpenaiKeySelected && _isEditingOpenaiKey) {
       openaiKeyWidget = _buildEditableTextItem(
@@ -298,7 +425,7 @@ class SettingsViewState extends State<SettingsView> {
         currentValue: _maskApiKey(_settings.openaiApiKey),
         onTap: () {
           setState(() {
-            _selectedIndex = 5;
+            _selectedIndex = 8;
             _isEditingOpenaiKey = true;
             _openaiKeyController.text = _settings.openaiApiKey;
           });
@@ -309,10 +436,10 @@ class SettingsViewState extends State<SettingsView> {
         isSelected: isOpenaiKeySelected,
       );
     }
-    _settingsItems[5] = openaiKeyWidget;
+    _settingsItems[8] = openaiKeyWidget;
 
     // Handle Anthropic API Key widget
-    bool isAnthropicKeySelected = _selectedIndex == 6;
+    bool isAnthropicKeySelected = _selectedIndex == 9;
     Widget anthropicKeyWidget;
     if (isAnthropicKeySelected && _isEditingAnthropicKey) {
       anthropicKeyWidget = _buildEditableTextItem(
@@ -329,7 +456,7 @@ class SettingsViewState extends State<SettingsView> {
         currentValue: _maskApiKey(_settings.anthropicApiKey),
         onTap: () {
           setState(() {
-            _selectedIndex = 6;
+            _selectedIndex = 9;
             _isEditingAnthropicKey = true;
             _anthropicKeyController.text = _settings.anthropicApiKey;
           });
@@ -340,7 +467,38 @@ class SettingsViewState extends State<SettingsView> {
         isSelected: isAnthropicKeySelected,
       );
     }
-    _settingsItems[6] = anthropicKeyWidget;
+    _settingsItems[9] = anthropicKeyWidget;
+
+    // Handle Gemini API Key widget
+    bool isGeminiKeySelected = _selectedIndex == 10;
+    Widget geminiKeyWidget;
+    if (isGeminiKeySelected && _isEditingGeminiKey) {
+      geminiKeyWidget = _buildEditableTextItem(
+        title: 'Gemini API Key',
+        controller: _geminiKeyController,
+        focusNode: _geminiKeyFocusNode,
+        isSelected: isGeminiKeySelected,
+        onSubmitted: _saveGeminiKey,
+        isPassword: true,
+      );
+    } else {
+      geminiKeyWidget = _buildSettingsItem(
+        title: 'Gemini API Key',
+        currentValue: _maskApiKey(_settings.geminiApiKey),
+        onTap: () {
+          setState(() {
+            _selectedIndex = 10;
+            _isEditingGeminiKey = true;
+            _geminiKeyController.text = _settings.geminiApiKey;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _geminiKeyFocusNode.requestFocus();
+          });
+        },
+        isSelected: isGeminiKeySelected,
+      );
+    }
+    _settingsItems[10] = geminiKeyWidget;
 
     return ListView.builder(
       itemCount: _settingsItems.length,
