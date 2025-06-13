@@ -165,7 +165,7 @@ Contributions are welcome! Areas for improvement:
 
 - Additional AI providers
 - New AI tools and capabilities
-- Cross-platform support (macOS, Linux)
+- Search optimizations for large disk
 - UI/UX enhancements
 - Performance optimizations
 
