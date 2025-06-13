@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:slightbar/settings_service.dart';
 
+const double listItemHeight = 60;
+
 class SettingsView extends StatefulWidget {
   final VoidCallback onSettingsChanged;
   const SettingsView({super.key, required this.onSettingsChanged});
@@ -12,6 +14,7 @@ class SettingsView extends StatefulWidget {
 class SettingsViewState extends State<SettingsView> {
   final SettingsService _settings = SettingsService();
   int _selectedIndex = 0; // For navigating settings items
+  final ScrollController _scrollController = ScrollController();
   bool _isEditingModel = false;
   bool _isEditingOpenaiKey = false;
   bool _isEditingAnthropicKey = false;
@@ -43,6 +46,7 @@ class SettingsViewState extends State<SettingsView> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _modelTextController.dispose();
     _openaiKeyController.dispose();
     _anthropicKeyController.dispose();
@@ -71,6 +75,7 @@ class SettingsViewState extends State<SettingsView> {
     setState(() {
       _selectedIndex = (_selectedIndex + 1) % _settingsItems.length;
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
   }
 
   void navigateUp() {
@@ -89,6 +94,7 @@ class SettingsViewState extends State<SettingsView> {
       _selectedIndex =
           (_selectedIndex - 1 + _settingsItems.length) % _settingsItems.length;
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
   }
 
   void handleEnter() {
@@ -173,6 +179,18 @@ class SettingsViewState extends State<SettingsView> {
           _geminiKeyFocusNode.requestFocus();
         });
         break;
+    }
+  }
+
+  void _scrollToSelected() {
+    if (_scrollController.hasClients) {
+      final targetOffset = _selectedIndex * listItemHeight;
+
+      _scrollController.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 100),
+        curve: Curves.easeInOut,
+      );
     }
   }
 
@@ -501,6 +519,7 @@ class SettingsViewState extends State<SettingsView> {
     _settingsItems[10] = geminiKeyWidget;
 
     return ListView.builder(
+      controller: _scrollController,
       itemCount: _settingsItems.length,
       itemBuilder: (context, index) {
         return _settingsItems[index];
@@ -517,6 +536,7 @@ class SettingsViewState extends State<SettingsView> {
     bool isPassword = false,
   }) {
     return Container(
+      height: listItemHeight,
       color: isSelected ? Colors.blue.withAlpha(128) : Colors.transparent,
       child: ListTile(
         title: Text(title, style: const TextStyle(color: Colors.white)),
@@ -557,6 +577,7 @@ class SettingsViewState extends State<SettingsView> {
         : (isDarkMode ? Colors.white70 : Colors.black54);
 
     return Container(
+      height: listItemHeight,
       color: isSelected ? Colors.blue.withAlpha(128) : Colors.transparent,
       child: ListTile(
         title: Text(title, style: TextStyle(color: textColor)),
