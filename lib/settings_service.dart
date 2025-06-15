@@ -23,11 +23,17 @@ class SettingsService {
   bool _webSearchEnabled = true;
   bool _webScrapeEnabled = true;
   bool _weatherEnabled = true;
+  bool _prayerTimesEnabled = true;
   String _searxngUrl = 'http://127.0.0.1:8080';
   AiProvider _aiProvider = AiProvider.ollama;
   String _openaiApiKey = '';
   String _anthropicApiKey = '';
   String _geminiApiKey = '';
+  List<String> _excludedDrives = [];
+  String _hotkeyKey = 'space';
+  List<String> _hotkeyModifiers = ['alt'];
+  bool _isFirstRun = true;
+  bool _indexDrives = false;
 
   // Public getters
   ThemeMode get themeMode => _themeMode;
@@ -50,20 +56,32 @@ class SettingsService {
   bool get webSearchEnabled => _webSearchEnabled;
   bool get webScrapeEnabled => _webScrapeEnabled;
   bool get weatherEnabled => _weatherEnabled;
+  bool get prayerTimesEnabled => _prayerTimesEnabled;
   String get searxngUrl => _searxngUrl;
 
   // Legacy getter for backward compatibility - returns true if any tool is enabled
   bool get toolsEnabled =>
-      _webSearchEnabled || _webScrapeEnabled || _weatherEnabled;
+      _webSearchEnabled ||
+      _webScrapeEnabled ||
+      _weatherEnabled ||
+      _prayerTimesEnabled;
 
   AiProvider get aiProvider => _aiProvider;
   String get openaiApiKey => _openaiApiKey;
   String get anthropicApiKey => _anthropicApiKey;
   String get geminiApiKey => _geminiApiKey;
+  List<String> get excludedDrives => _excludedDrives;
+  String get hotkeyKey => _hotkeyKey;
+  List<String> get hotkeyModifiers => _hotkeyModifiers;
+  bool get isFirstRun => _isFirstRun;
+  bool get indexDrives => _indexDrives;
 
   /// Initializes the service, loading settings from disk.
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+
+    _isFirstRun = _prefs.getBool('is_first_run') ?? true;
+
     // Load theme
     final themeString = _prefs.getString('theme') ?? 'System';
     _themeMode = _stringToThemeMode(themeString);
@@ -91,6 +109,7 @@ class SettingsService {
     _webSearchEnabled = _prefs.getBool('web_search_enabled') ?? true;
     _webScrapeEnabled = _prefs.getBool('web_scrape_enabled') ?? true;
     _weatherEnabled = _prefs.getBool('weather_enabled') ?? true;
+    _prayerTimesEnabled = _prefs.getBool('prayer_times_enabled') ?? true;
     _searxngUrl = _prefs.getString('searxng_url') ?? 'http://127.0.0.1:8080';
 
     // For backward compatibility, if old tools_enabled exists, apply it to all tools
@@ -99,10 +118,12 @@ class SettingsService {
       _webSearchEnabled = oldToolsEnabled;
       _webScrapeEnabled = oldToolsEnabled;
       _weatherEnabled = oldToolsEnabled;
+      _prayerTimesEnabled = oldToolsEnabled;
       // Save to new format and remove old key
       await _prefs.setBool('web_search_enabled', _webSearchEnabled);
       await _prefs.setBool('web_scrape_enabled', _webScrapeEnabled);
       await _prefs.setBool('weather_enabled', _weatherEnabled);
+      await _prefs.setBool('prayer_times_enabled', _prayerTimesEnabled);
       await _prefs.remove('tools_enabled');
     }
 
@@ -113,6 +134,34 @@ class SettingsService {
     _openaiApiKey = _prefs.getString('openai_api_key') ?? '';
     _anthropicApiKey = _prefs.getString('anthropic_api_key') ?? '';
     _geminiApiKey = _prefs.getString('gemini_api_key') ?? '';
+    _excludedDrives = _prefs.getStringList('excluded_drives') ?? [];
+    _hotkeyKey = _prefs.getString('hotkey_key') ?? 'space';
+    _hotkeyModifiers = _prefs.getStringList('hotkey_modifiers') ?? ['alt'];
+    _indexDrives = _prefs.getBool('index_drives') ?? false;
+
+    // If it's the first run, it means the settings file was likely empty.
+    // We should write the default values we just loaded into memory back to disk.
+    if (_isFirstRun) {
+      await _prefs.setString('theme', _themeModeToString(_themeMode));
+      await _prefs.setString('ollama_model', _ollamaModel);
+      await _prefs.setString('openai_model', _openaiModel);
+      await _prefs.setString('anthropic_model', _anthropicModel);
+      await _prefs.setString('gemini_model', _geminiModel);
+      await _prefs.setBool('ai_enabled', _aiEnabled);
+      await _prefs.setBool('web_search_enabled', _webSearchEnabled);
+      await _prefs.setBool('web_scrape_enabled', _webScrapeEnabled);
+      await _prefs.setBool('weather_enabled', _weatherEnabled);
+      await _prefs.setBool('prayer_times_enabled', _prayerTimesEnabled);
+      await _prefs.setString('searxng_url', _searxngUrl);
+      await _prefs.setString('ai_provider', _aiProviderToString(_aiProvider));
+      await _prefs.setString('openai_api_key', _openaiApiKey);
+      await _prefs.setString('anthropic_api_key', _anthropicApiKey);
+      await _prefs.setString('gemini_api_key', _geminiApiKey);
+      await _prefs.setStringList('excluded_drives', _excludedDrives);
+      await _prefs.setString('hotkey_key', _hotkeyKey);
+      await _prefs.setStringList('hotkey_modifiers', _hotkeyModifiers);
+      await _prefs.setBool('index_drives', _indexDrives);
+    }
   }
 
   /// Updates and saves the theme mode.
@@ -167,6 +216,12 @@ class SettingsService {
     await _prefs.setBool('weather_enabled', _weatherEnabled);
   }
 
+  /// Toggles prayer times tool on/off.
+  Future<void> togglePrayerTimesEnabled() async {
+    _prayerTimesEnabled = !_prayerTimesEnabled;
+    await _prefs.setBool('prayer_times_enabled', _prayerTimesEnabled);
+  }
+
   /// Sets the SearxNG URL.
   Future<void> setSearxngUrl(String url) async {
     _searxngUrl = url;
@@ -195,6 +250,75 @@ class SettingsService {
   Future<void> setGeminiApiKey(String key) async {
     _geminiApiKey = key;
     await _prefs.setString('gemini_api_key', key);
+  }
+
+  /// Sets the excluded drives.
+  Future<void> setExcludedDrives(List<String> drives) async {
+    _excludedDrives = drives;
+    await _prefs.setStringList('excluded_drives', drives);
+  }
+
+  /// Sets the hotkey configuration.
+  Future<void> setHotkey(String key, List<String> modifiers) async {
+    _hotkeyKey = key;
+    _hotkeyModifiers = modifiers;
+    await _prefs.setString('hotkey_key', key);
+    await _prefs.setStringList('hotkey_modifiers', modifiers);
+  }
+
+  /// Toggles drive indexing.
+  Future<void> toggleIndexDrives() async {
+    _indexDrives = !_indexDrives;
+    await _prefs.setBool('index_drives', _indexDrives);
+  }
+
+  /// Sets the isFirstRun flag.
+  set isFirstRun(bool value) {
+    _isFirstRun = value;
+    _prefs.setBool('is_first_run', value);
+  }
+
+  /// Gets a formatted hotkey string for display.
+  String getHotkeyDisplayString() {
+    final modifierNames = _hotkeyModifiers.map((mod) {
+      switch (mod.toLowerCase()) {
+        case 'control':
+          return 'Ctrl';
+        case 'alt':
+          return 'Alt';
+        case 'shift':
+          return 'Shift';
+        case 'meta':
+          return 'Win';
+        default:
+          return mod;
+      }
+    }).join(' + ');
+
+    final keyName = _formatKeyName(_hotkeyKey);
+
+    return modifierNames.isNotEmpty ? '$modifierNames + $keyName' : keyName;
+  }
+
+  String _formatKeyName(String key) {
+    switch (key.toLowerCase()) {
+      case 'space':
+        return 'Space';
+      case 'slash':
+        return '/';
+      case 'semicolon':
+        return ';';
+      case 'backquote':
+        return '`';
+      case 'enter':
+        return 'Enter';
+      case 'tab':
+        return 'Tab';
+      case 'escape':
+        return 'Esc';
+      default:
+        return key.toUpperCase();
+    }
   }
 
   ThemeMode _stringToThemeMode(String theme) {

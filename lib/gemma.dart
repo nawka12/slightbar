@@ -56,6 +56,11 @@ CRITICAL RULES:
           "- For weather questions, use `get_weather`. DO NOT cite a source for the weather.\n\n";
     }
 
+    if (settings.prayerTimesEnabled) {
+      toolDefinitions +=
+          "- For prayer times, use `get_prayer_times`. DO NOT cite a source for prayer times.\n\n";
+    }
+
     toolDefinitions +=
         "IMPORTANT RULE: If a tool returns a message that starts with \"Error:\", you MUST stop and output that exact error message to the user. Do not apologize or try to correct the problem yourself.\n\nTools available:\n";
 
@@ -91,6 +96,18 @@ web_scrape(url="https://example.com/article")
 get_weather(city="London", units="imperial")
 ```
 """;
+      toolNumber++;
+    }
+
+    if (settings.prayerTimesEnabled) {
+      toolDefinitions +=
+          """$toolNumber. get_prayer_times(city: string, country: string)
+    - Description: Gets the daily prayer times for a specific city and country.
+    - Example: ```tool_code
+get_prayer_times(city="London", country="UK")
+```
+""";
+      toolNumber++;
     }
 
     return toolDefinitions;
@@ -147,6 +164,27 @@ get_weather(city="London", units="imperial")
             }
           },
           "required": ["city"]
+        }
+      });
+    }
+
+    if (settings.prayerTimesEnabled) {
+      tools.add({
+        "name": "get_prayer_times",
+        "description": "Gets the daily prayer times for a specific city.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "The city to get prayer times for"
+            },
+            "country": {
+              "type": "string",
+              "description": "The country of the city"
+            }
+          },
+          "required": ["city", "country"]
         }
       });
     }
@@ -655,6 +693,42 @@ get_weather(city="London", units="imperial")
       }
     }
 
+    if (toolName == 'get_prayer_times') {
+      if (!settings.prayerTimesEnabled) {
+        return 'Error: Prayer times tool is disabled in settings.';
+      }
+      final city = input['city'] as String?;
+      final country = input['country'] as String?;
+      if (city == null || country == null) {
+        return 'Error: Missing "city" or "country" parameter for get_prayer_times.';
+      }
+
+      debugPrint(
+          'Executing Claude get_prayer_times for city: "$city", country: "$country"');
+      try {
+        final response = await http.get(Uri.parse(
+            'http://api.aladhan.com/v1/timingsByCity?city=${Uri.encodeComponent(city)}&country=${Uri.encodeComponent(country)}'));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body)['data'];
+          final timings = data['timings'];
+          final date = data['date']['readable'];
+          final location = '$city, $country';
+
+          return 'Prayer times for $location on $date:\n'
+              'Fajr: ${timings['Fajr']}\n'
+              'Sunrise: ${timings['Sunrise']}\n'
+              'Dhuhr: ${timings['Dhuhr']}\n'
+              'Asr: ${timings['Asr']}\n'
+              'Maghrib: ${timings['Maghrib']}\n'
+              'Isha: ${timings['Isha']}';
+        } else {
+          return 'Error: Prayer times service returned status ${response.statusCode}. City might not be found.';
+        }
+      } catch (e) {
+        return 'Error: Failed to connect to prayer times service.';
+      }
+    }
+
     return 'Error: Unknown tool "$toolName".';
   }
 
@@ -866,6 +940,42 @@ get_weather(city="London", units="imperial")
         }
       } catch (e) {
         return 'Error: Failed to connect to weather service.';
+      }
+    }
+
+    if (toolCallString.startsWith('get_prayer_times')) {
+      if (!settings.prayerTimesEnabled) {
+        return 'Error: Prayer times tool is disabled in settings.';
+      }
+      final city = _parseToolParameter(toolCallString, 'city');
+      final country = _parseToolParameter(toolCallString, 'country');
+      if (city == null || country == null) {
+        return 'Error: Missing "city" or "country" parameter for get_prayer_times.';
+      }
+
+      debugPrint(
+          'Executing get_prayer_times for city: "$city", country: "$country"');
+      try {
+        final response = await http.get(Uri.parse(
+            'http://api.aladhan.com/v1/timingsByCity?city=${Uri.encodeComponent(city)}&country=${Uri.encodeComponent(country)}'));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body)['data'];
+          final timings = data['timings'];
+          final date = data['date']['readable'];
+          final location = '$city, $country';
+
+          return 'Prayer times for $location on $date:\n'
+              'Fajr: ${timings['Fajr']}\n'
+              'Sunrise: ${timings['Sunrise']}\n'
+              'Dhuhr: ${timings['Dhuhr']}\n'
+              'Asr: ${timings['Asr']}\n'
+              'Maghrib: ${timings['Maghrib']}\n'
+              'Isha: ${timings['Isha']}';
+        } else {
+          return 'Error: Prayer times service returned status ${response.statusCode}. City might not be found.';
+        }
+      } catch (e) {
+        return 'Error: Failed to connect to prayer times service.';
       }
     }
 
@@ -1447,6 +1557,8 @@ get_weather(city="London", units="imperial")
                   _usedTools.add('scrape');
                 } else if (toolName == 'get_weather') {
                   _usedTools.add('weather');
+                } else if (toolName == 'get_prayer_times') {
+                  _usedTools.add('prayer_times');
                 }
 
                 // Notify about tool usage
@@ -1482,43 +1594,60 @@ get_weather(city="London", units="imperial")
 
         // Only process tool calls if tools are enabled
         if (settings.toolsEnabled) {
-          final toolCallMatch = toolCallRegex.firstMatch(fullResponse);
-          if (toolCallMatch != null) {
+          final toolCallMatches = toolCallRegex.allMatches(fullResponse);
+          if (toolCallMatches.isNotEmpty) {
             final conversationalText =
-                fullResponse.replaceFirst(toolCallRegex, '').trim();
+                fullResponse.replaceAll(toolCallRegex, '').trim();
             if (conversationalText.isNotEmpty) {
               debugPrint(
                   "AI says: $conversationalText"); // Maybe show this in UI later
             }
 
-            final toolCallString = toolCallMatch.group(1)!.trim();
             messages.add({'role': 'assistant', 'content': fullResponse});
 
-            // Track which tool is being used
-            if (toolCallString.startsWith('web_search')) {
-              _usedTools.add('search');
-            } else if (toolCallString.startsWith('web_scrape')) {
-              _usedTools.add('scrape');
-            } else if (toolCallString.startsWith('get_weather')) {
-              _usedTools.add('weather');
+            // Process each tool call sequentially
+            List<String> allToolResults = [];
+            for (final toolCallMatch in toolCallMatches) {
+              final toolCallString = toolCallMatch.group(1)!.trim();
+
+              // Track which tool is being used
+              if (toolCallString.startsWith('web_search')) {
+                _usedTools.add('search');
+              } else if (toolCallString.startsWith('web_scrape')) {
+                _usedTools.add('scrape');
+              } else if (toolCallString.startsWith('get_weather')) {
+                _usedTools.add('weather');
+              } else if (toolCallString.startsWith('get_prayer_times')) {
+                _usedTools.add('prayer_times');
+              }
+
+              // Notify about tool usage
+              if (onToolUsage != null) {
+                String toolMessage = _getToolUsageMessage(toolCallString);
+                onToolUsage(toolMessage);
+                yield {
+                  'type': 'tool_usage',
+                  'content': toolMessage,
+                  'fullResponse': fullResponse,
+                  'usedTools': List<String>.from(_usedTools),
+                };
+              }
+
+              final toolResult = await _executeToolCall(toolCallString);
+              allToolResults.add(toolResult);
             }
 
-            // Notify about tool usage
-            if (onToolUsage != null) {
-              String toolMessage = _getToolUsageMessage(toolCallString);
-              onToolUsage(toolMessage);
-              yield {
-                'type': 'tool_usage',
-                'content': toolMessage,
-                'fullResponse': fullResponse,
-                'usedTools': List<String>.from(_usedTools),
-              };
-            }
+            // Combine all tool results
+            final combinedResults = allToolResults
+                .asMap()
+                .entries
+                .map((entry) => 'Tool ${entry.key + 1} result:\n${entry.value}')
+                .join('\n\n');
 
-            final toolResult = await _executeToolCall(toolCallString);
             messages.add({
               'role': 'user',
-              'content': 'Tool executed. Here is the result:\n$toolResult'
+              'content':
+                  'Tools executed. Here are the results:\n$combinedResults'
             });
             continue; // Continue the conversation loop
           }
@@ -1693,6 +1822,12 @@ get_weather(city="London", units="imperial")
       final city =
           _parseToolParameter(toolCallString, 'city') ?? 'unknown city';
       return 'Getting weather for: $city...';
+    } else if (toolCallString.startsWith('get_prayer_times')) {
+      final city =
+          _parseToolParameter(toolCallString, 'city') ?? 'unknown city';
+      final country =
+          _parseToolParameter(toolCallString, 'country') ?? 'unknown country';
+      return 'Getting prayer times for: $city, $country...';
     }
     return 'Using tool...';
   }
@@ -1710,6 +1845,10 @@ get_weather(city="London", units="imperial")
     } else if (toolName == 'get_weather') {
       final city = input['city'] as String? ?? 'unknown city';
       return 'Getting weather for: $city...';
+    } else if (toolName == 'get_prayer_times') {
+      final city = input['city'] as String? ?? 'unknown city';
+      final country = input['country'] as String? ?? 'unknown country';
+      return 'Getting prayer times for: $city, $country...';
     }
     return 'Using tool...';
   }

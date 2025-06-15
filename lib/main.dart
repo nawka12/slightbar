@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -12,6 +13,7 @@ import 'package:slightbar/gemma.dart';
 import 'package:slightbar/settings_service.dart';
 import 'package:slightbar/settings_view.dart';
 import 'package:slightbar/about_view.dart';
+import 'package:slightbar/file_index_service.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:path/path.dart' as p;
 import 'package:open_file/open_file.dart';
@@ -27,6 +29,7 @@ const int maxFileResults = 50;
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SettingsService().init();
+  await FileIndexService.instance.init();
   await windowManager.ensureInitialized();
   await hotKeyManager.unregisterAll();
 
@@ -37,7 +40,7 @@ void main() async {
     titleBarStyle: TitleBarStyle.hidden,
     alwaysOnTop: true,
   );
-
+  //
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     final primaryDisplay = await screenRetriever.getPrimaryDisplay();
     final screenSize = primaryDisplay.size;
@@ -72,18 +75,23 @@ class _MyAppState extends State<MyApp> {
   bool _isGemmaLoading = false;
   bool _isShowingSettings = false;
   bool _isShowingAbout = false;
+  String _indexingStatus = '';
   List<String> _usedTools = [];
+  Timer? _debounce;
   final GlobalKey<SettingsViewState> _settingsViewKey =
       GlobalKey<SettingsViewState>();
   final GlobalKey<AboutViewState> _aboutViewKey = GlobalKey<AboutViewState>();
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _focusNode.dispose();
     _searchFocusNode.dispose();
     _textController.dispose();
     _scrollController.dispose();
     _gemmaScrollController.dispose();
+    FileIndexService.instance.indexingStatusNotifier
+        .removeListener(_onIndexingStatusChanged);
     super.dispose();
   }
 
@@ -94,6 +102,27 @@ class _MyAppState extends State<MyApp> {
     _textController.addListener(_onSearchChanged);
     _getInstalledApps();
     _resizeWindow();
+    FileIndexService.instance.indexingStatusNotifier
+        .addListener(_onIndexingStatusChanged);
+    _indexingStatus = FileIndexService.instance.indexingStatusNotifier.value;
+  }
+
+  void _onIndexingStatusChanged() {
+    if (mounted) {
+      final wasIndexing = _indexingStatus.isNotEmpty;
+      final newStatus = FileIndexService.instance.indexingStatusNotifier.value;
+      final isIndexing = newStatus.isNotEmpty;
+
+      setState(() {
+        _indexingStatus = newStatus;
+      });
+
+      // Only resize if the indexing state has changed (started or stopped)
+      // This prevents resizing on every single progress update.
+      if (wasIndexing != isIndexing) {
+        _resizeWindow();
+      }
+    }
   }
 
   /// Helper method to find which display contains the current cursor position
@@ -137,7 +166,7 @@ class _MyAppState extends State<MyApp> {
     await windowManager.setPosition(Offset(x, y));
   }
 
-  void _handleCommand(String text) {
+  Future<void> _handleCommand(String text) async {
     final query = text.trim();
     if (query == '!s') {
       setState(() {
@@ -169,35 +198,49 @@ class _MyAppState extends State<MyApp> {
       _resizeWindow();
       return;
     }
-  }
-
-  void _onSearchChanged() async {
-    final query = _textController.text;
-
-    if (query.trim() == '!s' || query.trim() == '!a') {
-      _handleCommand(query);
+    if (query == '!reindex') {
+      FileIndexService.instance.rebuildIndex();
+      // Optionally, provide feedback to the user
+      _textController.clear();
+      setState(() {
+        _gemmaResponse = 'Re-indexing started in the background...';
+      });
+      _resizeWindow();
+      // Clear the message after a few seconds
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted &&
+            _gemmaResponse == 'Re-indexing started in the background...') {
+          setState(() {
+            _gemmaResponse = '';
+          });
+          _resizeWindow();
+        }
+      });
       return;
     }
+    if (query == '!q' || query == '!quit') {
+      // Save any indexing progress before quitting
+      await FileIndexService.instance.gracefulShutdown();
+      // Quit the application
+      windowManager.close();
+      return;
+    }
+  }
 
+  void _onSearchChanged() {
+    // Cancel any existing timer to debounce the search.
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+
+    // --- These actions happen immediately on any key press ---
+    final query = _textController.text;
+
+    // Handle special commands only on Enter press - removed immediate handling
     if (query.startsWith('!')) {
-      return; // Handled by key event
+      return; // Commands are handled by the Enter key event only.
     }
 
-    // Reset selected index on any change
-    setState(() {
-      _selectedIndex = 0;
-    });
-
-    // Hide settings and about if user types anything else
-    if ((_isShowingSettings || _isShowingAbout) && query.isNotEmpty) {
-      setState(() {
-        _isShowingSettings = false;
-        _isShowingAbout = false;
-      });
-    }
-
+    // Immediately update UI for AI query prompts.
     if (SettingsService().aiEnabled && query.startsWith('?')) {
-      // User is typing a Gemma query. Clear results and wait for Enter.
       setState(() {
         _filteredApps = [];
         _foundFiles = [];
@@ -205,6 +248,7 @@ class _MyAppState extends State<MyApp> {
         _isGemmaLoading = false;
       });
       _resizeWindow();
+      return;
     } else if (!SettingsService().aiEnabled && query.startsWith('?')) {
       setState(() {
         _filteredApps = [];
@@ -215,13 +259,31 @@ class _MyAppState extends State<MyApp> {
         _usedTools.clear();
       });
       _resizeWindow();
-    } else {
-      // Standard local search logic
+      return;
+    }
+    // Hide settings/about views immediately when the user starts typing.
+    if ((_isShowingSettings || _isShowingAbout) && query.isNotEmpty) {
+      setState(() {
+        _isShowingSettings = false;
+        _isShowingAbout = false;
+      });
+    }
+
+    // --- This is the debounced search logic ---
+    _debounce = Timer(const Duration(milliseconds: 200), () async {
+      final currentQuery = _textController.text;
+      // Reset the selected index when the search runs.
+      setState(() {
+        _selectedIndex = 0;
+      });
+
+      // Clear away any AI responses.
       setState(() {
         _gemmaResponse = '';
         _isGemmaLoading = false;
       });
-      if (query.length > 2) {
+
+      if (currentQuery.length > 2) {
         _filterApps();
         await _searchFiles();
       } else {
@@ -231,7 +293,7 @@ class _MyAppState extends State<MyApp> {
         });
       }
       _resizeWindow();
-    }
+    });
   }
 
   void _filterApps() {
@@ -245,47 +307,14 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _searchFiles() async {
-    final String? userProfilePath = Platform.environment['USERPROFILE'];
     final searchQuery = _textController.text;
-    var shell = Shell();
+    final results = await FileIndexService.instance.search(searchQuery);
 
-    List<String> foundFiles = [];
-
-    if (userProfilePath != null) {
-      final List<String> userFoldersToSearch = [
-        p.join(userProfilePath, 'Documents'),
-        p.join(userProfilePath, 'Downloads'),
-        p.join(userProfilePath, 'Desktop'),
-        p.join(userProfilePath, 'Pictures'),
-        p.join(userProfilePath, 'Music'),
-      ];
-
-      final pathsString = userFoldersToSearch
-          .where((path) => Directory(path).existsSync())
-          .map((d) => "'$d'")
-          .join(',');
-
-      if (pathsString.isNotEmpty) {
-        final userFolderSearchScript =
-            "Get-ChildItem -Path $pathsString -Recurse -File -Filter \"*$searchQuery*\" -ErrorAction SilentlyContinue | Select-Object -First $maxFileResults | ForEach-Object { \$_.FullName }";
-
-        try {
-          var results =
-              await shell.run('powershell -command "$userFolderSearchScript"');
-          if (results.isNotEmpty) {
-            foundFiles.addAll(
-                results.first.outText.split('\n').where((s) => s.isNotEmpty));
-          }
-        } on ShellException catch (e) {
-          debugPrint('Error searching user folders: $e');
-        }
-      }
+    if (mounted) {
+      setState(() {
+        _foundFiles = results.take(maxFileResults).toList();
+      });
     }
-
-    // Remove duplicates and update state
-    setState(() {
-      _foundFiles = foundFiles.toSet().toList();
-    });
   }
 
   Future<void> _askGemma(String query) async {
@@ -349,7 +378,13 @@ class _MyAppState extends State<MyApp> {
     const maxVisibleResults = 5;
     final totalResults = _filteredApps.length + _foundFiles.length;
     final displayableResults = min(totalResults, maxResults);
-    final visibleResultCount = min(displayableResults, maxVisibleResults);
+    final hasIndexingFooter = _indexingStatus.isNotEmpty &&
+        !_isShowingSettings &&
+        !_isShowingAbout &&
+        _gemmaResponse.isEmpty &&
+        !_isGemmaLoading;
+    final extraItems = hasIndexingFooter ? 1 : 0;
+    final visibleResultCount = min(displayableResults, maxResults);
 
     double newHeight = searchBarHeight;
 
@@ -362,8 +397,9 @@ class _MyAppState extends State<MyApp> {
       newHeight += aiResponseHeight;
     } else if (_isShowingSettings || _isShowingAbout) {
       newHeight = 450; // Fixed height for settings and about
-    } else if (displayableResults > 0) {
-      newHeight += (visibleResultCount * listItemHeight) + 1; // +1 for divider
+    } else if (displayableResults > 0 || hasIndexingFooter) {
+      newHeight += ((visibleResultCount + extraItems) * listItemHeight) +
+          1; // +1 for divider
     }
 
     const maxWindowHeight = 600.0;
@@ -408,10 +444,65 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  void _registerHotKey() async {
+  Future<void> _unregisterHotKey() async {
+    await hotKeyManager.unregisterAll();
+  }
+
+  Future<void> _reregisterHotKey() async {
+    await _unregisterHotKey();
+    await _registerHotKey();
+  }
+
+  Future<void> _registerHotKey() async {
+    final settings = SettingsService();
+
+    // Convert string key to PhysicalKeyboardKey
+    PhysicalKeyboardKey key;
+    switch (settings.hotkeyKey.toLowerCase()) {
+      case 'space':
+        key = PhysicalKeyboardKey.space;
+        break;
+      case 'slash':
+        key = PhysicalKeyboardKey.slash;
+        break;
+      case 'semicolon':
+        key = PhysicalKeyboardKey.semicolon;
+        break;
+      case 'backquote':
+        key = PhysicalKeyboardKey.backquote;
+        break;
+      case 'enter':
+        key = PhysicalKeyboardKey.enter;
+        break;
+      case 'tab':
+        key = PhysicalKeyboardKey.tab;
+        break;
+      case 'escape':
+        key = PhysicalKeyboardKey.escape;
+        break;
+      default:
+        key = PhysicalKeyboardKey.space; // Fallback
+    }
+
+    // Convert string modifiers to HotKeyModifier
+    List<HotKeyModifier> modifiers = settings.hotkeyModifiers.map((mod) {
+      switch (mod.toLowerCase()) {
+        case 'control':
+          return HotKeyModifier.control;
+        case 'alt':
+          return HotKeyModifier.alt;
+        case 'shift':
+          return HotKeyModifier.shift;
+        case 'meta':
+          return HotKeyModifier.meta;
+        default:
+          return HotKeyModifier.alt; // Fallback
+      }
+    }).toList();
+
     HotKey hotKey = HotKey(
-      key: PhysicalKeyboardKey.slash,
-      modifiers: [HotKeyModifier.control],
+      key: key,
+      modifiers: modifiers,
       scope: HotKeyScope.system,
     );
 
@@ -567,8 +658,47 @@ class _MyAppState extends State<MyApp> {
                                         )
                                       : ListView.builder(
                                           controller: _scrollController,
-                                          itemCount: allDisplayResults.length,
+                                          itemCount: allDisplayResults.length +
+                                              (_indexingStatus.isNotEmpty
+                                                  ? 1
+                                                  : 0),
                                           itemBuilder: (context, index) {
+                                            // If it's the last item and we are indexing, show status
+                                            if (_indexingStatus.isNotEmpty &&
+                                                index ==
+                                                    allDisplayResults.length) {
+                                              return Container(
+                                                height: listItemHeight,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 16.0),
+                                                child: Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    const SizedBox(
+                                                        width: 12,
+                                                        height: 12,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                                strokeWidth:
+                                                                    2)),
+                                                    const SizedBox(width: 10),
+                                                    Flexible(
+                                                      child: Text(
+                                                        _indexingStatus,
+                                                        style: TextStyle(
+                                                            color: hintColor,
+                                                            fontSize: 12),
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }
+
                                             final itemPathOrName =
                                                 allDisplayResults[index];
                                             final isApp = _installedApps
@@ -653,6 +783,13 @@ class _MyAppState extends State<MyApp> {
 
     // Always allow escape to close the window
     if (event.logicalKey == LogicalKeyboardKey.escape) {
+      if (_isShowingSettings) {
+        final settingsHandledEscape =
+            _settingsViewKey.currentState?.handleEscape() ?? false;
+        if (settingsHandledEscape) {
+          return KeyEventResult.handled;
+        }
+      }
       _hideAndClear();
       return KeyEventResult.handled;
     }
@@ -780,7 +917,21 @@ class _MyAppState extends State<MyApp> {
     final appId = _installedApps[appName];
     if (appId != null) {
       var shell = Shell();
-      shell.run('powershell -command "explorer.exe shell:appsFolder\\$appId"');
+      String command;
+
+      // Heuristic to distinguish UWP apps from Win32 shortcuts.
+      // UWP AppIDs contain '!' while Win32 apps from the Start Menu usually don't.
+      if (appId.contains('!')) {
+        // This is the standard way to launch UWP apps.
+        command = 'powershell -command "explorer.exe shell:appsFolder\\$appId"';
+      } else {
+        // For Win32 apps, `Start-Process` (aliased as `start`) is more reliable
+        // than `explorer.exe` for execution. It correctly handles shortcuts (.lnk)
+        // and other path-like references from the Start Menu.
+        // The path must be single-quoted for PowerShell.
+        command = 'powershell -command "start \'shell:appsFolder\\$appId\'"';
+      }
+      shell.run(command);
     }
   }
 
@@ -802,6 +953,9 @@ class _MyAppState extends State<MyApp> {
     }
     if (_usedTools.contains('weather')) {
       icons.add(Icon(Icons.cloud, color: color, size: 16));
+    }
+    if (_usedTools.contains('prayer_times')) {
+      icons.add(Icon(Icons.mosque, color: color, size: 16));
     }
 
     return Container(

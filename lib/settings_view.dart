@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:slightbar/settings_service.dart';
 
@@ -14,25 +15,60 @@ class SettingsView extends StatefulWidget {
 class SettingsViewState extends State<SettingsView> {
   final SettingsService _settings = SettingsService();
   int _selectedIndex = 0; // For navigating settings items
+  int _selectedHotkeyIndex = 0; // For hotkey picker navigation
   final ScrollController _scrollController = ScrollController();
   bool _isEditingModel = false;
   bool _isEditingOpenaiKey = false;
   bool _isEditingAnthropicKey = false;
   bool _isEditingGeminiKey = false;
   bool _isEditingSearxngUrl = false;
+  bool _isEditingExcludedDrives = false;
+  bool _isShowingHotkeyPicker = false;
   final TextEditingController _modelTextController = TextEditingController();
   final TextEditingController _openaiKeyController = TextEditingController();
   final TextEditingController _anthropicKeyController = TextEditingController();
   final TextEditingController _geminiKeyController = TextEditingController();
   final TextEditingController _searxngUrlController = TextEditingController();
+  final TextEditingController _excludedDrivesController =
+      TextEditingController();
   final FocusNode _modelFocusNode = FocusNode();
   final FocusNode _openaiKeyFocusNode = FocusNode();
   final FocusNode _anthropicKeyFocusNode = FocusNode();
   final FocusNode _geminiKeyFocusNode = FocusNode();
   final FocusNode _searxngUrlFocusNode = FocusNode();
+  final FocusNode _excludedDrivesFocusNode = FocusNode();
 
   // This list will hold all the settings widgets
   late List<Widget> _settingsItems;
+  late List<Function> _onEnterActions;
+
+  final List<Map<String, dynamic>> _hotkeyOptions = [
+    {
+      'display': 'Alt + Space',
+      'key': 'space',
+      'modifiers': ['alt']
+    },
+    {
+      'display': 'Ctrl + Space',
+      'key': 'space',
+      'modifiers': ['control']
+    },
+    {
+      'display': 'Ctrl + ;',
+      'key': 'semicolon',
+      'modifiers': ['control']
+    },
+    {
+      'display': 'Ctrl + `',
+      'key': 'backquote',
+      'modifiers': ['control']
+    },
+    {
+      'display': 'Ctrl + Shift + Space',
+      'key': 'space',
+      'modifiers': ['control', 'shift']
+    },
+  ];
 
   @override
   void initState() {
@@ -42,6 +78,7 @@ class SettingsViewState extends State<SettingsView> {
     _anthropicKeyController.text = _settings.anthropicApiKey;
     _geminiKeyController.text = _settings.geminiApiKey;
     _searxngUrlController.text = _settings.searxngUrl;
+    _excludedDrivesController.text = _settings.excludedDrives.join(', ');
   }
 
   @override
@@ -52,15 +89,25 @@ class SettingsViewState extends State<SettingsView> {
     _anthropicKeyController.dispose();
     _geminiKeyController.dispose();
     _searxngUrlController.dispose();
+    _excludedDrivesController.dispose();
     _modelFocusNode.dispose();
     _openaiKeyFocusNode.dispose();
     _anthropicKeyFocusNode.dispose();
     _geminiKeyFocusNode.dispose();
     _searxngUrlFocusNode.dispose();
+    _excludedDrivesFocusNode.dispose();
     super.dispose();
   }
 
   void navigateDown() {
+    if (_isShowingHotkeyPicker) {
+      setState(() {
+        _selectedHotkeyIndex =
+            (_selectedHotkeyIndex + 1) % _hotkeyOptions.length;
+      });
+      _scrollToSelected();
+      return;
+    }
     if (_isEditingModel) {
       _saveModel();
     } else if (_isEditingOpenaiKey) {
@@ -71,6 +118,8 @@ class SettingsViewState extends State<SettingsView> {
       _saveGeminiKey();
     } else if (_isEditingSearxngUrl) {
       _saveSearxngUrl();
+    } else if (_isEditingExcludedDrives) {
+      _saveExcludedDrives();
     }
     setState(() {
       _selectedIndex = (_selectedIndex + 1) % _settingsItems.length;
@@ -79,6 +128,15 @@ class SettingsViewState extends State<SettingsView> {
   }
 
   void navigateUp() {
+    if (_isShowingHotkeyPicker) {
+      setState(() {
+        _selectedHotkeyIndex =
+            (_selectedHotkeyIndex - 1 + _hotkeyOptions.length) %
+                _hotkeyOptions.length;
+      });
+      _scrollToSelected();
+      return;
+    }
     if (_isEditingModel) {
       _saveModel();
     } else if (_isEditingOpenaiKey) {
@@ -89,6 +147,8 @@ class SettingsViewState extends State<SettingsView> {
       _saveGeminiKey();
     } else if (_isEditingSearxngUrl) {
       _saveSearxngUrl();
+    } else if (_isEditingExcludedDrives) {
+      _saveExcludedDrives();
     }
     setState(() {
       _selectedIndex =
@@ -97,7 +157,22 @@ class SettingsViewState extends State<SettingsView> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
   }
 
+  bool handleEscape() {
+    if (_isShowingHotkeyPicker) {
+      setState(() {
+        _isShowingHotkeyPicker = false;
+        _selectedHotkeyIndex = 0;
+      });
+      return true;
+    }
+    return false;
+  }
+
   void handleEnter() {
+    if (_isShowingHotkeyPicker) {
+      _selectHotkey(_hotkeyOptions[_selectedHotkeyIndex]);
+      return;
+    }
     if (_isEditingModel) {
       _saveModel();
       return;
@@ -114,77 +189,25 @@ class SettingsViewState extends State<SettingsView> {
       _saveGeminiKey();
       return;
     }
+    if (_isEditingSearxngUrl) {
+      _saveSearxngUrl();
+      return;
+    }
+    if (_isEditingExcludedDrives) {
+      _saveExcludedDrives();
+      return;
+    }
 
-    switch (_selectedIndex) {
-      case 0:
-        _cycleTheme();
-        break;
-      case 1:
-        _toggleAi();
-        break;
-      case 2:
-        _toggleWebSearch();
-        break;
-      case 3:
-        _toggleWebScrape();
-        break;
-      case 4:
-        _toggleWeather();
-        break;
-      case 5:
-        _cycleAiProvider();
-        break;
-      case 6:
-        // AI Model editing
-        setState(() {
-          _isEditingModel = true;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _modelFocusNode.requestFocus();
-        });
-        break;
-      case 7:
-        // SearxNG URL editing
-        setState(() {
-          _isEditingSearxngUrl = true;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _searxngUrlFocusNode.requestFocus();
-        });
-        break;
-      case 8:
-        // OpenAI API Key editing
-        setState(() {
-          _isEditingOpenaiKey = true;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _openaiKeyFocusNode.requestFocus();
-        });
-        break;
-      case 9:
-        // Anthropic API Key editing
-        setState(() {
-          _isEditingAnthropicKey = true;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _anthropicKeyFocusNode.requestFocus();
-        });
-        break;
-      case 10:
-        // Gemini API Key editing
-        setState(() {
-          _isEditingGeminiKey = true;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _geminiKeyFocusNode.requestFocus();
-        });
-        break;
+    if (_selectedIndex < _onEnterActions.length) {
+      _onEnterActions[_selectedIndex]();
     }
   }
 
   void _scrollToSelected() {
     if (_scrollController.hasClients) {
-      final targetOffset = _selectedIndex * listItemHeight;
+      final index =
+          _isShowingHotkeyPicker ? _selectedHotkeyIndex : _selectedIndex;
+      final targetOffset = index * listItemHeight;
 
       _scrollController.animateTo(
         targetOffset,
@@ -192,6 +215,7 @@ class SettingsViewState extends State<SettingsView> {
         curve: Curves.easeInOut,
       );
     }
+    widget.onSettingsChanged();
   }
 
   void _cycleTheme() {
@@ -201,8 +225,9 @@ class SettingsViewState extends State<SettingsView> {
       ThemeMode.light: ThemeMode.dark,
       ThemeMode.dark: ThemeMode.system,
     }[currentTheme];
-    _settings.setThemeMode(newTheme!);
-    widget.onSettingsChanged();
+    _settings.setThemeMode(newTheme!).then((_) => setState(() {
+          widget.onSettingsChanged();
+        }));
   }
 
   void _toggleAi() {
@@ -227,6 +252,24 @@ class SettingsViewState extends State<SettingsView> {
     _settings.toggleWeatherEnabled().then((_) => setState(() {
           widget.onSettingsChanged();
         }));
+  }
+
+  void _togglePrayerTimes() {
+    _settings.togglePrayerTimesEnabled().then((_) => setState(() {
+          widget.onSettingsChanged();
+        }));
+  }
+
+  void _toggleIndexDrives() {
+    _settings.toggleIndexDrives().then((_) {
+      setState(() {
+        // If the selection is now out of bounds, adjust it.
+        if (_selectedIndex >= _settingsItems.length) {
+          _selectedIndex = _settingsItems.length - 1;
+        }
+        widget.onSettingsChanged();
+      });
+    });
   }
 
   void _cycleAiProvider() {
@@ -286,6 +329,19 @@ class SettingsViewState extends State<SettingsView> {
     widget.onSettingsChanged();
   }
 
+  Future<void> _saveExcludedDrives() async {
+    final drives = _excludedDrivesController.text
+        .split(',')
+        .map((e) => e.trim().toUpperCase())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    await _settings.setExcludedDrives(drives);
+    setState(() {
+      _isEditingExcludedDrives = false;
+    });
+    widget.onSettingsChanged();
+  }
+
   String _getProviderDisplayName(AiProvider provider) {
     switch (provider) {
       case AiProvider.ollama:
@@ -320,203 +376,14 @@ class SettingsViewState extends State<SettingsView> {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuild the settings items whenever the state changes
-    _settingsItems = [
-      _buildSettingsItem(
-        title: 'Theme',
-        currentValue: _settings.themeMode.name,
-        onTap: _cycleTheme,
-        isSelected: _selectedIndex == 0,
-      ),
-      _buildSettingsItem(
-        title: 'Enable AI',
-        currentValue: _settings.aiEnabled ? 'On' : 'Off',
-        onTap: _toggleAi,
-        isSelected: _selectedIndex == 1,
-      ),
-      _buildSettingsItem(
-        title: 'Web Search',
-        currentValue: _settings.webSearchEnabled ? 'On' : 'Off',
-        onTap: _toggleWebSearch,
-        isSelected: _selectedIndex == 2,
-      ),
-      _buildSettingsItem(
-        title: 'Web Scrape',
-        currentValue: _settings.webScrapeEnabled ? 'On' : 'Off',
-        onTap: _toggleWebScrape,
-        isSelected: _selectedIndex == 3,
-      ),
-      _buildSettingsItem(
-        title: 'Weather',
-        currentValue: _settings.weatherEnabled ? 'On' : 'Off',
-        onTap: _toggleWeather,
-        isSelected: _selectedIndex == 4,
-      ),
-      _buildSettingsItem(
-        title: 'AI Provider',
-        currentValue: _getProviderDisplayName(_settings.aiProvider),
-        onTap: _cycleAiProvider,
-        isSelected: _selectedIndex == 5,
-      ),
-      const SizedBox.shrink(), // Placeholder for the model setting widget
-      const SizedBox.shrink(), // Placeholder for SearxNG URL widget
-      const SizedBox.shrink(), // Placeholder for OpenAI key widget
-      const SizedBox.shrink(), // Placeholder for Anthropic key widget
-      const SizedBox.shrink(), // Placeholder for Gemini key widget
-    ];
+    _buildSettingsItems();
 
-    // Handle model setting widget
-    bool isModelSelected = _selectedIndex == 6;
-    Widget modelSettingWidget;
-    if (isModelSelected && _isEditingModel) {
-      modelSettingWidget = _buildEditableTextItem(
-        title: _getModelLabel(),
-        controller: _modelTextController,
-        focusNode: _modelFocusNode,
-        isSelected: isModelSelected,
-        onSubmitted: _saveModel,
-      );
-    } else {
-      modelSettingWidget = _buildSettingsItem(
-        title: _getModelLabel(),
-        currentValue: _settings.gemmaModel,
-        onTap: () {
-          setState(() {
-            _selectedIndex = 6;
-            _isEditingModel = true;
-            _modelTextController.text = _settings.gemmaModel;
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _modelFocusNode.requestFocus();
-          });
-        },
-        isSelected: isModelSelected,
-      );
+    if (_isShowingHotkeyPicker) {
+      return _buildHotkeyPicker();
     }
-    _settingsItems[6] = modelSettingWidget;
-
-    // Handle SearxNG URL setting widget
-    bool isSearxngUrlSelected = _selectedIndex == 7;
-    Widget searxngUrlWidget;
-    if (isSearxngUrlSelected && _isEditingSearxngUrl) {
-      searxngUrlWidget = _buildEditableTextItem(
-        title: 'SearxNG URL',
-        controller: _searxngUrlController,
-        focusNode: _searxngUrlFocusNode,
-        isSelected: isSearxngUrlSelected,
-        onSubmitted: _saveSearxngUrl,
-      );
-    } else {
-      searxngUrlWidget = _buildSettingsItem(
-        title: 'SearxNG URL',
-        currentValue: _settings.searxngUrl,
-        onTap: () {
-          setState(() {
-            _selectedIndex = 7;
-            _isEditingSearxngUrl = true;
-            _searxngUrlController.text = _settings.searxngUrl;
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _searxngUrlFocusNode.requestFocus();
-          });
-        },
-        isSelected: isSearxngUrlSelected,
-      );
-    }
-    _settingsItems[7] = searxngUrlWidget;
-
-    // Handle OpenAI API Key widget
-    bool isOpenaiKeySelected = _selectedIndex == 8;
-    Widget openaiKeyWidget;
-    if (isOpenaiKeySelected && _isEditingOpenaiKey) {
-      openaiKeyWidget = _buildEditableTextItem(
-        title: 'OpenAI API Key',
-        controller: _openaiKeyController,
-        focusNode: _openaiKeyFocusNode,
-        isSelected: isOpenaiKeySelected,
-        onSubmitted: _saveOpenaiKey,
-        isPassword: true,
-      );
-    } else {
-      openaiKeyWidget = _buildSettingsItem(
-        title: 'OpenAI API Key',
-        currentValue: _maskApiKey(_settings.openaiApiKey),
-        onTap: () {
-          setState(() {
-            _selectedIndex = 8;
-            _isEditingOpenaiKey = true;
-            _openaiKeyController.text = _settings.openaiApiKey;
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _openaiKeyFocusNode.requestFocus();
-          });
-        },
-        isSelected: isOpenaiKeySelected,
-      );
-    }
-    _settingsItems[8] = openaiKeyWidget;
-
-    // Handle Anthropic API Key widget
-    bool isAnthropicKeySelected = _selectedIndex == 9;
-    Widget anthropicKeyWidget;
-    if (isAnthropicKeySelected && _isEditingAnthropicKey) {
-      anthropicKeyWidget = _buildEditableTextItem(
-        title: 'Anthropic API Key',
-        controller: _anthropicKeyController,
-        focusNode: _anthropicKeyFocusNode,
-        isSelected: isAnthropicKeySelected,
-        onSubmitted: _saveAnthropicKey,
-        isPassword: true,
-      );
-    } else {
-      anthropicKeyWidget = _buildSettingsItem(
-        title: 'Anthropic API Key',
-        currentValue: _maskApiKey(_settings.anthropicApiKey),
-        onTap: () {
-          setState(() {
-            _selectedIndex = 9;
-            _isEditingAnthropicKey = true;
-            _anthropicKeyController.text = _settings.anthropicApiKey;
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _anthropicKeyFocusNode.requestFocus();
-          });
-        },
-        isSelected: isAnthropicKeySelected,
-      );
-    }
-    _settingsItems[9] = anthropicKeyWidget;
-
-    // Handle Gemini API Key widget
-    bool isGeminiKeySelected = _selectedIndex == 10;
-    Widget geminiKeyWidget;
-    if (isGeminiKeySelected && _isEditingGeminiKey) {
-      geminiKeyWidget = _buildEditableTextItem(
-        title: 'Gemini API Key',
-        controller: _geminiKeyController,
-        focusNode: _geminiKeyFocusNode,
-        isSelected: isGeminiKeySelected,
-        onSubmitted: _saveGeminiKey,
-        isPassword: true,
-      );
-    } else {
-      geminiKeyWidget = _buildSettingsItem(
-        title: 'Gemini API Key',
-        currentValue: _maskApiKey(_settings.geminiApiKey),
-        onTap: () {
-          setState(() {
-            _selectedIndex = 10;
-            _isEditingGeminiKey = true;
-            _geminiKeyController.text = _settings.geminiApiKey;
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _geminiKeyFocusNode.requestFocus();
-          });
-        },
-        isSelected: isGeminiKeySelected,
-      );
-    }
-    _settingsItems[10] = geminiKeyWidget;
+    // Rebuild the settings items whenever the state changes.
+    // This approach is more robust than using placeholders.
+    // _settingsItems = _buildSettingsList();
 
     return ListView.builder(
       controller: _scrollController,
@@ -525,6 +392,390 @@ class SettingsViewState extends State<SettingsView> {
         return _settingsItems[index];
       },
     );
+  }
+
+  void _buildSettingsItems() {
+    final items = <Widget>[];
+    final onEnterActions = <Function>[];
+    int currentIndex = 0;
+
+    void addItem(Widget widget, Function onEnter) {
+      items.add(widget);
+      onEnterActions.add(onEnter);
+      currentIndex++;
+    }
+
+    // Theme
+    addItem(
+        _buildSettingsItem(
+          title: 'Theme',
+          currentValue: _settings.themeMode.name,
+          onTap: _cycleTheme,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _cycleTheme);
+
+    // AI Enabled
+    addItem(
+        _buildSettingsItem(
+          title: 'Enable AI',
+          currentValue: _settings.aiEnabled ? 'On' : 'Off',
+          onTap: _toggleAi,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _toggleAi);
+
+    // Web Search
+    addItem(
+        _buildSettingsItem(
+          title: 'Web Search',
+          currentValue: _settings.webSearchEnabled ? 'On' : 'Off',
+          onTap: _toggleWebSearch,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _toggleWebSearch);
+
+    // Web Scrape
+    addItem(
+        _buildSettingsItem(
+          title: 'Web Scrape',
+          currentValue: _settings.webScrapeEnabled ? 'On' : 'Off',
+          onTap: _toggleWebScrape,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _toggleWebScrape);
+
+    // Weather
+    addItem(
+        _buildSettingsItem(
+          title: 'Weather',
+          currentValue: _settings.weatherEnabled ? 'On' : 'Off',
+          onTap: _toggleWeather,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _toggleWeather);
+
+    // Prayer Times
+    addItem(
+        _buildSettingsItem(
+          title: 'Prayer Times',
+          currentValue: _settings.prayerTimesEnabled ? 'On' : 'Off',
+          onTap: _togglePrayerTimes,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _togglePrayerTimes);
+
+    // Hotkey
+    void showHotkeyPicker() {
+      setState(() {
+        _isShowingHotkeyPicker = true;
+      });
+    }
+
+    addItem(
+        _buildSettingsItem(
+          title: 'Global Hotkey',
+          currentValue: _settings.getHotkeyDisplayString(),
+          onTap: showHotkeyPicker,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        showHotkeyPicker);
+
+    // Index Drives
+    addItem(
+        _buildSettingsItem(
+          title: 'Index Drives (Experimental)',
+          currentValue: _settings.indexDrives ? 'On' : 'Off',
+          onTap: _toggleIndexDrives,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _toggleIndexDrives);
+
+    // Excluded Drives (conditional)
+    if (_settings.indexDrives) {
+      void editExcludedDrives() {
+        setState(() {
+          _isEditingExcludedDrives = true;
+          _excludedDrivesController.text = _settings.excludedDrives.join(', ');
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _excludedDrivesFocusNode.requestFocus();
+        });
+      }
+
+      if (_selectedIndex == currentIndex && _isEditingExcludedDrives) {
+        addItem(
+            _buildEditableTextItem(
+              title: 'Excluded Drives',
+              controller: _excludedDrivesController,
+              focusNode: _excludedDrivesFocusNode,
+              isSelected: true,
+              onSubmitted: _saveExcludedDrives,
+            ),
+            _saveExcludedDrives);
+      } else {
+        addItem(
+            _buildSettingsItem(
+              title: 'Excluded Drives',
+              currentValue: _settings.excludedDrives.join(', ').isEmpty
+                  ? 'None'
+                  : _settings.excludedDrives.join(', '),
+              onTap: editExcludedDrives,
+              isSelected: _selectedIndex == currentIndex,
+            ),
+            editExcludedDrives);
+      }
+    }
+
+    // AI Provider
+    addItem(
+        _buildSettingsItem(
+          title: 'AI Provider',
+          currentValue: _getProviderDisplayName(_settings.aiProvider),
+          onTap: _cycleAiProvider,
+          isSelected: _selectedIndex == currentIndex,
+        ),
+        _cycleAiProvider);
+
+    // AI Model
+    void editModel() {
+      setState(() {
+        _isEditingModel = true;
+        _modelTextController.text = _settings.gemmaModel;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _modelFocusNode.requestFocus();
+      });
+    }
+
+    if (_selectedIndex == currentIndex && _isEditingModel) {
+      addItem(
+          _buildEditableTextItem(
+            title: _getModelLabel(),
+            controller: _modelTextController,
+            focusNode: _modelFocusNode,
+            isSelected: true,
+            onSubmitted: _saveModel,
+          ),
+          _saveModel);
+    } else {
+      addItem(
+          _buildSettingsItem(
+            title: _getModelLabel(),
+            currentValue: _settings.gemmaModel,
+            onTap: editModel,
+            isSelected: _selectedIndex == currentIndex,
+          ),
+          editModel);
+    }
+
+    // SearxNG URL
+    void editSearxngUrl() {
+      setState(() {
+        _isEditingSearxngUrl = true;
+        _searxngUrlController.text = _settings.searxngUrl;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _searxngUrlFocusNode.requestFocus();
+      });
+    }
+
+    if (_selectedIndex == currentIndex && _isEditingSearxngUrl) {
+      addItem(
+          _buildEditableTextItem(
+            title: 'SearxNG URL',
+            controller: _searxngUrlController,
+            focusNode: _searxngUrlFocusNode,
+            isSelected: true,
+            onSubmitted: _saveSearxngUrl,
+          ),
+          _saveSearxngUrl);
+    } else {
+      addItem(
+          _buildSettingsItem(
+            title: 'SearxNG URL',
+            currentValue: _settings.searxngUrl,
+            onTap: editSearxngUrl,
+            isSelected: _selectedIndex == currentIndex,
+          ),
+          editSearxngUrl);
+    }
+
+    // OpenAI API Key
+    void editOpenaiKey() {
+      setState(() {
+        _isEditingOpenaiKey = true;
+        _openaiKeyController.text = _settings.openaiApiKey;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openaiKeyFocusNode.requestFocus();
+      });
+    }
+
+    if (_selectedIndex == currentIndex && _isEditingOpenaiKey) {
+      addItem(
+          _buildEditableTextItem(
+            title: 'OpenAI API Key',
+            controller: _openaiKeyController,
+            focusNode: _openaiKeyFocusNode,
+            isSelected: true,
+            onSubmitted: _saveOpenaiKey,
+            isPassword: true,
+          ),
+          _saveOpenaiKey);
+    } else {
+      addItem(
+          _buildSettingsItem(
+            title: 'OpenAI API Key',
+            currentValue: _maskApiKey(_settings.openaiApiKey),
+            onTap: editOpenaiKey,
+            isSelected: _selectedIndex == currentIndex,
+          ),
+          editOpenaiKey);
+    }
+
+    // Anthropic API Key
+    void editAnthropicKey() {
+      setState(() {
+        _isEditingAnthropicKey = true;
+        _anthropicKeyController.text = _settings.anthropicApiKey;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _anthropicKeyFocusNode.requestFocus();
+      });
+    }
+
+    if (_selectedIndex == currentIndex && _isEditingAnthropicKey) {
+      addItem(
+          _buildEditableTextItem(
+            title: 'Anthropic API Key',
+            controller: _anthropicKeyController,
+            focusNode: _anthropicKeyFocusNode,
+            isSelected: true,
+            onSubmitted: _saveAnthropicKey,
+            isPassword: true,
+          ),
+          _saveAnthropicKey);
+    } else {
+      addItem(
+          _buildSettingsItem(
+            title: 'Anthropic API Key',
+            currentValue: _maskApiKey(_settings.anthropicApiKey),
+            onTap: editAnthropicKey,
+            isSelected: _selectedIndex == currentIndex,
+          ),
+          editAnthropicKey);
+    }
+
+    // Gemini API Key
+    void editGeminiKey() {
+      setState(() {
+        _isEditingGeminiKey = true;
+        _geminiKeyController.text = _settings.geminiApiKey;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _geminiKeyFocusNode.requestFocus();
+      });
+    }
+
+    if (_selectedIndex == currentIndex && _isEditingGeminiKey) {
+      addItem(
+          _buildEditableTextItem(
+            title: 'Gemini API Key',
+            controller: _geminiKeyController,
+            focusNode: _geminiKeyFocusNode,
+            isSelected: true,
+            onSubmitted: _saveGeminiKey,
+            isPassword: true,
+          ),
+          _saveGeminiKey);
+    } else {
+      addItem(
+          _buildSettingsItem(
+            title: 'Gemini API Key',
+            currentValue: _maskApiKey(_settings.geminiApiKey),
+            onTap: editGeminiKey,
+            isSelected: _selectedIndex == currentIndex,
+          ),
+          editGeminiKey);
+    }
+
+    _settingsItems = items;
+    _onEnterActions = onEnterActions;
+  }
+
+  Widget _buildHotkeyPicker() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDarkMode ? Colors.white : Colors.black;
+    final subtitleColor = isDarkMode ? Colors.white70 : Colors.black54;
+
+    return Column(
+      children: [
+        SizedBox(
+          height: listItemHeight,
+          child: ListTile(
+            title: Text('Choose Global Hotkey',
+                style:
+                    TextStyle(color: textColor, fontWeight: FontWeight.bold)),
+            trailing: Text('Press ESC to cancel',
+                style: TextStyle(color: subtitleColor, fontSize: 12)),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            itemCount: _hotkeyOptions.length,
+            itemBuilder: (context, index) {
+              final option = _hotkeyOptions[index];
+              final isCurrentHotkey = _settings.hotkeyKey == option['key'] &&
+                  listEquals(
+                      _settings.hotkeyModifiers, option['modifiers'] as List);
+
+              final isSelected = index == _selectedHotkeyIndex;
+
+              return Container(
+                height: listItemHeight,
+                color: isSelected
+                    ? Colors.blue.withAlpha(128)
+                    : Colors.transparent,
+                child: ListTile(
+                  title: Text(option['display'] as String,
+                      style: TextStyle(
+                        color: isSelected ? Colors.white : textColor,
+                      )),
+                  trailing: isCurrentHotkey
+                      ? Icon(Icons.check,
+                          color: isSelected ? Colors.white : Colors.green)
+                      : null,
+                  onTap: () => _selectHotkey(option),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _selectHotkey(Map<String, dynamic> option) async {
+    await _settings.setHotkey(
+        option['key'] as String, (option['modifiers'] as List).cast<String>());
+    setState(() {
+      _isShowingHotkeyPicker = false;
+    });
+    widget.onSettingsChanged();
+
+    // Show a message about restarting the app
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Hotkey changed! Restart the app for changes to take effect.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   Widget _buildEditableTextItem({
