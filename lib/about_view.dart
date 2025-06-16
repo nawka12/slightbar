@@ -15,8 +15,8 @@ class AboutViewState extends State<AboutView> {
 
   // About information
   static const String appName = 'SlightBar';
-  static const String version = '1.0.0';
-  static const String buildNumber = '1';
+  static const String version = '1.1.0';
+  static const String buildNumber = '2';
   static const String creator = 'nawka12 (a.k.a KayfaHaarukku)';
   static const String license = 'MIT License';
   static const String githubUrl = 'https://github.com/nawka12/slightbar';
